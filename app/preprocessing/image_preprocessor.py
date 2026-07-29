@@ -226,9 +226,9 @@ class ImagePreprocessor:
         debug_filename = f"{stem}_preprocessed{suffix}"
         debug_path = os.path.join(self.debug_dir, debug_filename)
 
-        # Convertir BGR → RGB pour PIL
+        # Convertir BGR -> RGB pour PIL
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(rgb)
         pil_image.save(debug_path)
 
-        print(f"  [Preprocess] Image prétraitée sauvegardée → {debug_path}")
+        print(f"  [Preprocess] Image prétraitée sauvegardée -> {debug_path}")

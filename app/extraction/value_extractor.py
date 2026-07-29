@@ -20,12 +20,16 @@ class ValueExtractor:
 
         # Patterns de validation par champ
         self._validators = {
-            "nom":              re.compile(r"^[A-ZÀÂÄÉÈÊËÎÏÔÙÛÜÇ\-\s']{2,30}$"),
+            "nom":              re.compile(r"^[A-ZÀÂÄÉÈÊËÎÏÔÙÛÜÇ][a-zA-ZÀÂÄÉÈÊËÎÏÔÙÛÜÇàâäéèêëîïôùûüç\-\s']{1,40}$"),
             "prenom":           re.compile(r"^[A-ZÀÂÄÉÈÊËÎÏÔÙÛÜÇ][a-zA-ZÀÂÄÉÈÊËÎÏÔÙÛÜÇàâäéèêëîïôùûüç,\-\s']{1,40}$"),
-            "nationalite":      re.compile(r"^(FRANCAISE|FRANÇAISE|FRA|FRENCH)$", re.IGNORECASE),
+            "nationalite":      re.compile(r"^[a-zA-ZÀ-ÿ\s/]{3,30}$", re.IGNORECASE),
             "date_naissance":   re.compile(r"^\d{1,2}[\.\-\/]\d{1,2}[\.\-\/]\d{2,4}$|^\d{8}$"),
+            "lieu_naissance":   re.compile(r"^[a-zA-ZÀ-ÿ\-\s\,\.']{2,40}$", re.IGNORECASE),
+            "date_delivrance":  re.compile(r"^\d{1,2}[\.\-\/]\d{1,2}[\.\-\/]\d{2,4}$|^\d{8}$"),
             "date_expiration":  re.compile(r"^\d{1,2}[\.\-\/]\d{1,2}[\.\-\/]\d{2,4}$|^\d{8}$"),
             "numero_document":  re.compile(r"^[A-Z0-9]{6,15}$"),
+            "sexe":             re.compile(r"^[MF]$", re.IGNORECASE),
+            "adresse":          re.compile(r"^[a-zA-Z0-9À-ÿ\-\s\,\.\']{5,100}$", re.IGNORECASE),
         }
 
     # =====================================================
@@ -63,8 +67,21 @@ class ValueExtractor:
             # le matcher classique échouera. On essaie d'abord par regex.
             glued_field, glued_value = self._extract_glued_inline(label_text)
             if glued_field and self._is_valid(glued_field, glued_value):
-                if glued_field not in result:
-                    result[glued_field] = glued_value
+                # Approche suggérée par l'utilisateur : souvent le VRAI texte est en dessous (layout unique), 
+                # et le texte collé n'est que du bruit de l'OCR (ex: LIEUDENAISSANCEIPSCCAA avec PARIS en dessous).
+                # On vérifie si une valeur valide se trouve en dessous.
+                below_candidates = self.find_values(label_item, items, i)
+                valid_below = next((c for c in below_candidates if self._is_valid(glued_field, c)), None)
+                
+                if valid_below:
+                    if glued_field not in result:
+                        if glued_field == "adresse":
+                            result[glued_field] = glued_value + ", " + valid_below
+                        else:
+                            result[glued_field] = valid_below
+                else:
+                    if glued_field not in result:
+                        result[glued_field] = glued_value
                 continue
 
             field, keyword = self.matcher.match_with_keyword(label_text)
@@ -83,9 +100,10 @@ class ValueExtractor:
                 continue
 
             # Recherche spatiale
-            value = self.find_value(label_item, items, i)
-            if value is not None and self._is_valid(field, value):
-                result[field] = value
+            sp_candidates = self.find_values(label_item, items, i)
+            valid_value = next((c for c in sp_candidates if self._is_valid(field, c)), None)
+            if valid_value is not None:
+                result[field] = valid_value
 
         # Étape 5 : Fallbacks simples pour les champs encore manquants
         self._apply_fallbacks(items, result)
@@ -96,9 +114,19 @@ class ValueExtractor:
             if not val or (len(val) < 2 and k != "sexe"):
                 del result[k]
             else:
+                if k in ["date_naissance", "date_expiration", "date_delivrance"]:
+                    val = self._format_date(val)
                 result[k] = val
 
         return result
+
+    @staticmethod
+    def _format_date(val):
+        """Formate une date brute (e.g. 13071990) en format lisible (13/07/1990)."""
+        clean_val = re.sub(r"[^\d]", "", val)
+        if len(clean_val) == 8:
+            return f"{clean_val[:2]}/{clean_val[2:4]}/{clean_val[4:]}"
+        return val
 
 
     # =====================================================
@@ -287,27 +315,38 @@ class ValueExtractor:
             
         # 4. Date de naissance
         # Cherche "ne(e)le", "necle", "datedenaissance", "datedenaisso"
-        m = re.match(r"^(ne\(?e?\)?l?e?|nec\)?l?e?|datedenaiss\w*|dob)([0-9\.\/\-]{8,10})$", clean)
+        m = re.match(r"^(ne\(?e?\)?l?e?|nec\)?l?e?|datedenaiss[a-z]*|dob)([0-9\.\/\-]{8,10})$", clean)
         if m:
             return "date_naissance", m.group(2)
             
         # 5. Date d'expiration
         # Cherche "datedexpiration", "dateexpration", ignore les apostrophes éventuelles
         clean_no_quote = clean.replace("'", "").replace('"', "")
-        m = re.match(r"^(dated?expir\w*|expir\w*)([0-9\.\/\-]{8,10})$", clean_no_quote)
+        m = re.match(r"^(dated?exp[a-z]*|exp[a-z]*)([0-9\.\/\-]{8,10})$", clean_no_quote)
         if m:
             return "date_expiration", m.group(2)
             
         # 6. Date d'émission
-        m = re.match(r"^(dated?emiss\w*|datedelivr\w*)([0-9\.\/\-]{6,10})$", clean_no_quote)
+        m = re.match(r"^(dated?emiss[a-z]*|datedelivr[a-z]*|dateofissue|issuedate|dataeleshimit)([0-9\.\/\-]{6,10})$", clean_no_quote)
         if m:
             return "date_delivrance", m.group(2)
             
         # 7. Numéro de document
         # Cherche "cartenationale...", "numerodocument" (non glouton)
-        m = re.match(r"^(cartenationaled?ident[a-z]*|numerodocument|ndudocument|passportnumber)([a-z0-9]{6,15})$", clean_no_quote)
+        m = re.match(r"^(cartenationaled?ident[a-z]*|numerodocument|ndudocument|passportnumber|iddocument|documentno)([a-z0-9]{6,15})$", clean_no_quote)
         if m:
             return "numero_document", m.group(2).upper()
+
+        # 8. Lieu de naissance
+        m = re.match(r"^(lieudenaissance|placeofbirth|placebirth|birthplace|vendlindja)([a-zà-ÿ\-\']{2,40})$", clean_no_quote)
+        if m:
+            return "lieu_naissance", m.group(2)
+
+        # 9. Adresse
+        m = re.match(r"^(adresse?|address|adresa)([a-z0-9à-ÿ\-\,\.\']{5,100})$", clean_no_quote)
+        if m:
+            # Pour l'adresse on veut conserver les espaces d'origine, on utilise l'astuce du texte non nettoyé
+            return "adresse", text[len(m.group(1)):].strip(" :.-\u00a0")
 
         return None, None
 
@@ -323,7 +362,7 @@ class ValueExtractor:
 
     def _is_valid(self, field, value):
         """Vérifie que la valeur extraite est cohérente avec le champ attendu."""
-        if not value or len(value.strip()) < 2:
+        if not value or (len(value.strip()) < 2 and field != "sexe"):
             return False
         pattern = self._validators.get(field)
         if pattern is None:
@@ -335,12 +374,12 @@ class ValueExtractor:
     # RECHERCHE SPATIALE DE LA VALEUR
     # =====================================================
 
-    def find_value(self, label_item, items, label_index):
+    def find_values(self, label_item, items, label_index):
 
         label_box = label_item["box"]
         label_y = self.center_y(label_box)
         label_right = label_box[1][0]
-        label_x = self.center_x(label_box)
+        label_x = label_box[0][0]
 
         candidates = []
 
@@ -352,11 +391,11 @@ class ValueExtractor:
             text = item["text"].strip()
             box = item["box"]
 
-            if not text or len(text) < 2:
+            if not text or (len(text) < 2 and text.upper() not in ["M", "F"]):
                 continue
 
             # Ignorer les sous-titres et bruits connus
-            if text.lower() in ["smam", "surname", "nationality", "sex", "a", "m", "f"]:
+            if text.lower() in ["smam", "surname", "nationality", "sex", "a"]:
                 continue
 
             # Ignorer les autres labels
@@ -378,15 +417,28 @@ class ValueExtractor:
             # Priorité 2 : juste en dessous du label (verticalement proche)
             if y > label_y:
                 v_dist = y - label_y
-                h_dist = abs(x - label_x)
+                h_dist = abs(left - label_x)
                 if v_dist <= self.max_vertical_distance and h_dist <= self.max_horizontal_distance:
                     candidates.append((v_dist, h_dist, text))
 
         if not candidates:
-            return None
+            return []
 
-        candidates.sort(key=lambda c: (c[0], c[1]))
-        return candidates[0][2]
+        # Séparer les candidats sur la même ligne (v_dist == 0) et ceux en dessous
+        inline_candidates = [c for c in candidates if c[0] == 0]
+        if inline_candidates:
+            inline_candidates.sort(key=lambda c: c[1])
+            return [c[2] for c in inline_candidates]
+            
+        # Pour les candidats en dessous, on cherche d'abord la ligne la plus proche
+        min_v_dist = min(c[0] for c in candidates)
+        
+        # On garde ceux qui sont sur cette même "ligne visuelle" (tolérance augmentée à 30 pixels pour les cartes inclinées)
+        closest_line_candidates = [c for c in candidates if c[0] <= min_v_dist + 30]
+        
+        # Et parmi eux, on prend celui qui est le plus aligné horizontalement
+        closest_line_candidates.sort(key=lambda c: c[1])
+        return [c[2] for c in closest_line_candidates]
 
 
     # =====================================================

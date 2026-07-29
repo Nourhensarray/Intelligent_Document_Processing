@@ -16,49 +16,84 @@ class PaddleEngine:
         )
 
 
-    def extract(self, image_input):
+    def extract(self, image_input, use_color_masking=False):
         """
         Lance l'OCR sur l'image.
 
         Args:
-            image_input: Chemin du fichier (str/Path) ou image BGR déjà
-                         prétraitée (np.ndarray). Si un tableau numpy est
-                         fourni, on l'utilise directement sans rechargement.
+            image_input: Chemin du fichier ou image BGR déjà prétraitée.
+            use_color_masking: Si True, sépare le texte bleu (clés) du texte noir (valeurs).
 
         Returns:
-            Liste de dicts {"text", "confidence", "box"}.
+            Liste de dicts {"text", "confidence", "box", "type" (optionnel)}.
         """
         if isinstance(image_input, np.ndarray):
             image = image_input
         else:
             image = self.load_image(image_input)
 
-        result = self.ocr.ocr(
-            image,
-            cls=True
-        )
+        if use_color_masking:
+            return self._extract_with_masks(image)
+
+        result = self.ocr.ocr(image, cls=True)
+        ocr_data = []
+        if result:
+            for line in result:
+                if line is None: continue
+                for item in line:
+                    ocr_data.append({
+                        "text": item[1][0],
+                        "confidence": item[1][1],
+                        "box": item[0],
+                        "type": "unknown"
+                    })
+        return ocr_data
+
+    def _extract_with_masks(self, image):
+        """Applique les masques de couleur pour différencier clés et valeurs."""
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+        # 1. Masque Bleu (Clés)
+        lower_blue = np.array([80, 50, 50])
+        upper_blue = np.array([130, 255, 255])
+        mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
+        img_cles = cv2.bitwise_not(mask_blue)
+        img_cles = cv2.cvtColor(img_cles, cv2.COLOR_GRAY2BGR)
+
+        # 2. Masque Noir (Valeurs)
+        lower_black = np.array([0, 0, 0])
+        upper_black = np.array([180, 255, 90])
+        mask_black = cv2.inRange(hsv, lower_black, upper_black)
+        img_valeurs = cv2.bitwise_not(mask_black)
+        img_valeurs = cv2.cvtColor(img_valeurs, cv2.COLOR_GRAY2BGR)
 
         ocr_data = []
 
-        for line in result:
+        # Extraction des clés (texte bleu)
+        res_cles = self.ocr.ocr(img_cles, cls=True)
+        if res_cles:
+            for line in res_cles:
+                if line is None: continue
+                for item in line:
+                    ocr_data.append({
+                        "text": item[1][0],
+                        "confidence": item[1][1],
+                        "box": item[0],
+                        "type": "key"  # Marqué comme Clé
+                    })
 
-            for item in line:
-
-                box = item[0]
-
-                text = item[1][0]
-
-                confidence = item[1][1]
-
-                ocr_data.append({
-
-                    "text": text,
-
-                    "confidence": confidence,
-
-                    "box": box
-
-                })
+        # Extraction des valeurs (texte noir)
+        res_val = self.ocr.ocr(img_valeurs, cls=True)
+        if res_val:
+            for line in res_val:
+                if line is None: continue
+                for item in line:
+                    ocr_data.append({
+                        "text": item[1][0],
+                        "confidence": item[1][1],
+                        "box": item[0],
+                        "type": "value" # Marqué comme Valeur
+                    })
 
         return ocr_data
 

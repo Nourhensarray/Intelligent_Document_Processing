@@ -17,7 +17,11 @@ class FieldMatcher:
                 "surname",
                 "family name",
                 "last name",
-                "name"
+                "name",
+                "mbiemri",
+                "nom d'usage",
+                "nomdusage",
+                "nomdusage1a"
             ],
 
             "prenom": [
@@ -27,7 +31,8 @@ class FieldMatcher:
                 "prénoms",
                 "first name",
                 "given name",
-                "given names"
+                "given names",
+                "emri"
             ],
 
             "date_naissance": [
@@ -36,16 +41,27 @@ class FieldMatcher:
                 "birth date",
                 "date of birth",
                 "dob",
-                "lieu de naissance",
                 "dute depalpance",
-                "date depalpance"
+                "date depalpance",
+                "datelindja",
+                "datélindia",
+                "datedenaisso"
+            ],
+
+            "lieu_naissance": [
+                "lieu de naissance",
+                "place of birth",
+                "birth place",
+                "vendlindja",
+                "lieudenaissance"
             ],
 
             "nationalite": [
                 "nationalite",
                 "nationalité",
                 "nationality",
-                "nationite"
+                "nationite",
+                "shtetesia"
             ],
 
             "numero_document": [
@@ -57,14 +73,21 @@ class FieldMatcher:
                 "n° document",
                 "ndudocumento",
                 "n° du document",
-                "no document"
+                "no document",
+                "nr leternjoftim",
+                "nr personal",
+                "ndudoclment",
+                "ndudoclmentloeno",
+                "card no"
             ],
 
             "date_delivrance": [
                 "date de délivrance",
                 "date de delivrance",
                 "date of issue",
-                "issue date"
+                "issue date",
+                "data e leshimit",
+                "dataleshimit"
             ],
 
             "date_expiration": [
@@ -73,8 +96,21 @@ class FieldMatcher:
                 "date of expiry",
                 "expiry date",
                 "expiration date",
-                "dateoexpir",
-                "dae drplration"
+                "dateexpir",
+                "dae drplration",
+                "data e skadimit"
+            ],
+            
+            "sexe": [
+                "sexe",
+                "sex",
+                "gjinia"
+            ],
+
+            "adresse": [
+                "adresse",
+                "address",
+                "adresa"
             ]
         }
 

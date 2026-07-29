@@ -1,5 +1,6 @@
 import sys
 import os
+import csv
 from pathlib import Path
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -37,27 +38,68 @@ def run_pipeline_on_image(pipeline: DocumentPipeline, image_path: str):
 
         print("\n--- DONNEES EXTRAITES (CLÉ-VALEUR) ---")
         print(result["data"])
+        return {"image": os.path.basename(image_path), "status": "SUCCESS", **result["data"]}
     else:
         print("\n[X] Pipeline interrompu : L'image n'a pas franchi le contrôle de qualité.")
+        return {"image": os.path.basename(image_path), "status": "FAILED"}
 
 
 def main():
     pipeline = DocumentPipeline()
+    results_list = []
 
     if len(sys.argv) > 1:
         target_path = sys.argv[1]
-        run_pipeline_on_image(pipeline, target_path)
+        res = run_pipeline_on_image(pipeline, target_path)
+        if res:
+            results_list.append(res)
     else:
         images_dir = Path("images")
         if images_dir.exists():
             image_files = [f for f in images_dir.iterdir() if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}]
             if image_files:
                 for img in sorted(image_files):
-                    run_pipeline_on_image(pipeline, str(img))
+                    res = run_pipeline_on_image(pipeline, str(img))
+                    if res:
+                        results_list.append(res)
             else:
                 print("Aucune image trouvée dans le dossier images/")
         else:
             print("Usage : python tests/test_pipeline.py <chemin_image>")
+
+    if results_list:
+        csv_path = "resultats_extraction.csv"
+        
+        # Ordre logique des colonnes (les champs connus d'abord)
+        logical_order = [
+            "image", "status", "numero_document", "nom", "prenom", 
+            "date_naissance", "lieu_naissance", "sexe", "nationalite", 
+            "adresse", "date_delivrance", "date_expiration"
+        ]
+        
+        # Collecter toutes les clés trouvées
+        all_keys = set()
+        for r in results_list:
+            all_keys.update(r.keys())
+            
+        # Créer les fieldnames : l'ordre logique d'abord, puis les autres clés imprévues
+        fieldnames = []
+        for col in logical_order:
+            if col in all_keys:
+                fieldnames.append(col)
+                all_keys.remove(col)
+        
+        # Ajouter le reste (s'il y en a) par ordre alphabétique
+        fieldnames.extend(sorted(list(all_keys)))
+        
+        # utf-8-sig permet à Excel de lire les accents directement sans problème
+        with open(csv_path, 'w', newline='', encoding='utf-8-sig') as csvfile:
+            # delimiter=';' est requis pour l'Excel français
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=';')
+            writer.writeheader()
+            for r in results_list:
+                writer.writerow(r)
+        print(f"\n[OK] Résultats sauvegardés dans {csv_path}")
 
 
 if __name__ == "__main__":

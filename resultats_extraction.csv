@@ -1,0 +1,6 @@
+﻿image;status;numero_document;nom;prenom;date_naissance;lieu_naissance;sexe;nationalite;adresse;date_delivrance;date_expiration
+carte_cin.png;SUCCESS;367253746;Agani;Adnan;20/11/1991;Bulcar,ALB;M;Shgiptare/Albanian;;13/04/2019;13/04/2029
+cin10.png;SUCCESS;25ABC123546;MICHEL;STEPHANIE, MARIE, ANNE;08/08/1990;;F;;125BLVD DELOCEAN, BELLEVILLE,75093,EV0;10/10/2020;11/11/2035
+cin2.jpg;FAILED;;;;;;;;;;
+cin3.jpg;SUCCESS;X4RTBPFW4;MARTIN;;13/07/1990;PARIS;F;MARTIN;;;11/02/2030
+test.jpeg;FAILED;;;;;;;;;;
