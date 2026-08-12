@@ -2,9 +2,12 @@ import sys
 import os
 import csv
 from pathlib import Path
+from unittest.mock import MagicMock
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from app.extraction.field_matcher import FieldMatcher
+from app.extraction.value_extractor import ValueExtractor
 from app.pipeline import DocumentPipeline
 
 
@@ -101,6 +104,42 @@ def main():
                 writer.writerow(r)
         print(f"\n[OK] Résultats sauvegardés dans {csv_path}")
 
+def test_pipeline_rejects_main_label_without_value():
+    pipeline = DocumentPipeline.__new__(DocumentPipeline)
+    pipeline.quality_checker = MagicMock()
+    pipeline.preprocessor = MagicMock()
+    pipeline.ocr_engine = MagicMock()
+    pipeline.postprocessor = MagicMock()
+    pipeline.layout_builder = MagicMock()
+    pipeline.value_extractor = MagicMock()
+    pipeline.field_matcher = FieldMatcher()
+
+    pipeline.quality_checker.check.return_value = {
+        "status": "ACCEPTED",
+        "score": 85,
+        "metrics": {},
+        "reasons": [],
+    }
+    pipeline.preprocessor.preprocess.return_value = "dummy_image"
+    pipeline.ocr_engine.extract.return_value = [
+        {"text": "nom", "confidence": 0.95, "box": [[0, 0], [100, 0], [100, 20], [0, 20]]},
+        {"text": "prenom", "confidence": 0.93, "box": [[0, 30], [120, 30], [120, 50], [0, 50]]},
+    ]
+    pipeline.postprocessor.process.side_effect = lambda data: data
+    pipeline.layout_builder.build.return_value = [
+        {"text": "nom prenom", "items": [
+            {"text": "nom", "box": [[0, 0], [100, 0], [100, 20], [0, 20]]},
+            {"text": "prenom", "box": [[0, 30], [120, 30], [120, 50], [0, 50]]},
+        ]}
+    ]
+    pipeline.value_extractor.extract.return_value = {}
+
+    result = pipeline.process("images/test.jpeg")
+
+    assert result["status"] == "FAILED"
+    assert result["failure_code"] == "REJECTED_UNCLEAR_KEYS"
+    assert result["layout"] is not None
+    assert result["ocr"] is not None
 
 if __name__ == "__main__":
     main()

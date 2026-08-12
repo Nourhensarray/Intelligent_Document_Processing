@@ -1,0 +1,6 @@
+Flask
+paddleocr
+rapidfuzz
+numpy
+opencv-python
+Pillow

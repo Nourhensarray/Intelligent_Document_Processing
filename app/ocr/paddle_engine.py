@@ -2,18 +2,56 @@ import numpy as np
 import cv2
 from PIL import Image, ImageOps
 
-from paddleocr import PaddleOCR
-
 
 class PaddleEngine:
 
-    def __init__(self):
+    def __init__(self, use_gpu: bool = True):
+        try:
+            from paddleocr import PaddleOCR
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError(
+                "The PaddleOCR package is not installed. "
+                "Install it with `pip install -r requirements.txt` or `pip install paddleocr`."
+            ) from exc
 
-        self.ocr = PaddleOCR(
-            lang="fr",
-            use_angle_cls=True,
-            use_gpu=False
-        )
+        if use_gpu:
+            # ── Mode GPU : inférence accélérée via CUDA ──
+            self.ocr = PaddleOCR(
+                lang="fr",
+                use_gpu=True,
+                gpu_id=0,
+                show_log=False,
+                det_limit_side_len=736,
+                rec_batch_num=8,
+                drop_score=0.5,
+                use_dilation=False,
+                det_db_score_mode="fast",
+                use_angle_cls=False,
+                enable_hpi=False,
+                enable_mkldnn=False,
+            )
+        else:
+            # ── Mode CPU : multiprocessing, chaque worker a son propre contexte ──
+            self.ocr = PaddleOCR(
+                lang="fr",
+                use_gpu=False,
+                det_limit_side_len=736,
+                rec_batch_num=8,      # Batch réduit en CPU pour ne pas surcharger un seul worker
+                use_angle_cls=False,
+                enable_mkldnn=True,   # Accélération Intel MKL-DNN pour CPU
+                cpu_threads=2,        # Limité pour laisser des cœurs aux autres workers
+                show_log=False,
+            )
+
+
+    def _resize_image(self, img, max_side=736):
+        h, w = img.shape[:2]
+        scale = max_side / max(h, w)
+        if scale < 1.0:
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        return img
 
 
     def extract(self, image_input, use_color_masking=False):
@@ -31,6 +69,8 @@ class PaddleEngine:
             image = image_input
         else:
             image = self.load_image(image_input)
+
+        image = self._resize_image(image, max_side=1280)
 
         if use_color_masking:
             return self._extract_with_masks(image)

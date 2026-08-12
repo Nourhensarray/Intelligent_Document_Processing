@@ -1,148 +1,249 @@
 import re
-import unicodedata
-
-
 from app.extraction.field_matcher import FieldMatcher
 
-
 class ValueExtractor:
+    """
+    Extracteur unifié (V2) avec support MRZ intégré et validation.
+    """
 
-    def __init__(self):
-
-        self.matcher = FieldMatcher()
-
-        # Distance maximale entre un label et sa valeur (en pixels)
-        self.max_vertical_distance = 120
-        self.max_horizontal_distance = 400
-
-        # Tolérance pour fusionner des boxes sur la même ligne
-        self.merge_horizontal_gap = 60
-
+    def __init__(self, matcher: "FieldMatcher | None" = None):
+        # Réutilise l'instance FieldMatcher du pipeline si fournie,
+        # sinon en crée une (compatibilité avec l'usage standalone).
+        self.matcher = matcher if matcher is not None else FieldMatcher()
+        
         # Patterns de validation par champ
         self._validators = {
-            "nom":              re.compile(r"^[A-ZÀÂÄÉÈÊËÎÏÔÙÛÜÇ][a-zA-ZÀÂÄÉÈÊËÎÏÔÙÛÜÇàâäéèêëîïôùûüç\-\s']{1,40}$"),
-            "prenom":           re.compile(r"^[A-ZÀÂÄÉÈÊËÎÏÔÙÛÜÇ][a-zA-ZÀÂÄÉÈÊËÎÏÔÙÛÜÇàâäéèêëîïôùûüç,\-\s']{1,40}$"),
-            "nationalite":      re.compile(r"^[a-zA-ZÀ-ÿ\s/]{3,30}$", re.IGNORECASE),
-            "date_naissance":   re.compile(r"^\d{1,2}[\.\-\/]\d{1,2}[\.\-\/]\d{2,4}$|^\d{8}$"),
-            "lieu_naissance":   re.compile(r"^[a-zA-ZÀ-ÿ\-\s\,\.']{2,40}$", re.IGNORECASE),
-            "date_delivrance":  re.compile(r"^\d{1,2}[\.\-\/]\d{1,2}[\.\-\/]\d{2,4}$|^\d{8}$"),
-            "date_expiration":  re.compile(r"^\d{1,2}[\.\-\/]\d{1,2}[\.\-\/]\d{2,4}$|^\d{8}$"),
+            "nom":              re.compile(r"^[A-ZÀÂÄÉÈÊËÎÏÔÙÛÜÇ\u0600-\u06FF][a-zA-ZÀÂÄÉÈÊËÎÏÔÙÛÜÇàâäéèêëîïôùûüç\-\s'\u0600-\u06FF]{1,40}$"),
+            "prenom":           re.compile(r"^[A-ZÀÂÄÉÈÊËÎÏÔÙÛÜÇ\u0600-\u06FF][a-zA-ZÀÂÄÉÈÊËÎÏÔÙÛÜÇàâäéèêëîïôùûüç,\-\s'\u0600-\u06FF]{1,40}$"),
+            "nationalite":      re.compile(r"^(?!.*nationalit)(?!.*nacionalidad)(?!.*nationality)[a-zA-ZÀ-ÿ\s/\-]{3,30}$", re.IGNORECASE),
+            "date_naissance":   re.compile(r"^\d{1,2}[\.\-\/\s]+\d{1,2}[\.\-\/\s]+\d{2,4}$|^\d{8}$|^\d{1,2}[\s]*[A-Za-z]{3}(?:/[A-Za-z]{3})?[\s]*\d{4}$"),
+            "lieu_naissance":   re.compile(r"^[a-zA-ZÀ-ÿ\-\s\,\.\u0600-\u06FF]{2,40}$", re.IGNORECASE),
+            "date_delivrance":  re.compile(r"^\d{1,2}[\.\-\/\s]+\d{1,2}[\.\-\/\s]+\d{2,4}$|^\d{8}$|^\d{1,2}[\s]*[A-Za-z]{3}(?:/[A-Za-z]{3})?[\s]*\d{4}$"),
+            "date_expiration":  re.compile(r"^\d{1,2}[\.\-\/\s]+\d{1,2}[\.\-\/\s]+\d{2,4}$|^\d{8}$|^\d{1,2}[\s]*[A-Za-z]{3}(?:/[A-Za-z]{3})?[\s]*\d{4}$"),
             "numero_document":  re.compile(r"^[A-Z0-9]{6,15}$"),
             "sexe":             re.compile(r"^[MF]$", re.IGNORECASE),
-            "adresse":          re.compile(r"^[a-zA-Z0-9À-ÿ\-\s\,\.\']{5,100}$", re.IGNORECASE),
+            "adresse":          re.compile(r"^[a-zA-Z0-9À-ÿ\-\s\,\.\u0600-\u06FF]{5,100}$", re.IGNORECASE),
         }
 
-    # =====================================================
-    # POINT D'ENTRÉE
-    # =====================================================
+    def _is_valid(self, field, value):
+        if field not in self._validators:
+            return True
+        return bool(self._validators[field].match(value.strip()))
 
-    def extract(self, ocr_data):
+    def _looks_like_field_label(self, value):
+        if not value:
+            return False
 
+        normalized_value = self.matcher.normalize(value)
+        if not normalized_value:
+            return False
+
+        field, keyword = self.matcher.match_with_keyword(value)
+        if field is None or not keyword:
+            return False
+
+        normalized_keyword = self.matcher.normalize(keyword)
+        if normalized_value == normalized_keyword:
+            return True
+
+        words = normalized_value.split()
+        if len(words) <= 3 and all(self.matcher.match_with_keyword(word)[0] is not None for word in words):
+            return True
+
+        return False
+
+    def _valid_field_value(self, field, value):
+        if not value:
+            return False
+
+        value = str(value).strip()
+        if not value:
+            return False
+
+        if self._looks_like_field_label(value):
+            return False
+
+        return self._is_valid(field, value)
+
+    def extract(self, layout):
         result = {}
 
-        if not ocr_data:
-            return result
+        # --- 1. Extraction MRZ (Haute Priorité) ---
+        # Aplatir les items du layout pour récupérer la MRZ
+        all_items = []
+        for line in layout:
+            if line and "items" in line:
+                all_items.extend(line["items"])
+        self._extract_from_mrz(all_items, result)
 
-        items = list(ocr_data)
-
-        # Étape 1 : MRZ (données les plus fiables)
-        self._extract_from_mrz(items, result)
-
-        # Étape 2 : Fusion des boxes sur la même ligne
-        items = self.merge_same_line_items(items)
-
-        # Étape 3 : Tri de haut en bas puis gauche à droite
-        items = sorted(
-            items,
-            key=lambda item: (self.center_y(item["box"]), self.center_x(item["box"]))
-        )
-
-        # Étape 4 : Extraction label → valeur
-        for i, label_item in enumerate(items):
-
-            label_text = label_item["text"]
-            
-            # --- TENTATIVE DE RÉCUPÉRATION GLUÉE ---
-            # Si le texte est collé (ex: "NCmMICHEL", "SexeF", "Nec)l08/08/1990"),
-            # le matcher classique échouera. On essaie d'abord par regex.
-            glued_field, glued_value = self._extract_glued_inline(label_text)
-            if glued_field and self._is_valid(glued_field, glued_value):
-                # Approche suggérée par l'utilisateur : souvent le VRAI texte est en dessous (layout unique), 
-                # et le texte collé n'est que du bruit de l'OCR (ex: LIEUDENAISSANCEIPSCCAA avec PARIS en dessous).
-                # On vérifie si une valeur valide se trouve en dessous.
-                below_candidates = self.find_values(label_item, items, i)
-                valid_below = next((c for c in below_candidates if self._is_valid(glued_field, c)), None)
-                
-                if valid_below:
-                    if glued_field not in result:
-                        if glued_field == "adresse":
-                            result[glued_field] = glued_value + ", " + valid_below
-                        else:
-                            result[glued_field] = valid_below
-                else:
-                    if glued_field not in result:
-                        result[glued_field] = glued_value
+        # --- 2. Extraction via Layout (Clé-Valeur Spatiale) ---
+        for index, line in enumerate(layout):
+            if not line:
                 continue
 
-            field, keyword = self.matcher.match_with_keyword(label_text)
+            items = line.get("items") or []
+            next_line_items = []
+            if index + 1 < len(layout):
+                next_line_items = layout[index + 1].get("items") or []
 
-            if field is None:
-                continue
-
-            # Ne pas écraser une valeur MRZ ou gluée fiable
-            if field in result and result[field]:
-                continue
-
-            # Cas inline classique (séparé par espace ou ':' mais capté par le matcher)
-            inline_value = self.extract_inline_value(label_text, keyword)
-            if inline_value and self._is_valid(field, inline_value):
-                result[field] = inline_value
-                continue
-
-            # Recherche spatiale
-            sp_candidates = self.find_values(label_item, items, i)
-            valid_value = next((c for c in sp_candidates if self._is_valid(field, c)), None)
-            if valid_value is not None:
-                result[field] = valid_value
-
-        # Étape 5 : Fallbacks simples pour les champs encore manquants
-        self._apply_fallbacks(items, result)
-
-        # Étape 6 : Nettoyage final
-        for k in list(result.keys()):
-            val = str(result[k]).strip(" :.-\u00a0/")
-            if not val or (len(val) < 2 and k != "sexe"):
-                del result[k]
+            if items:
+                line_result = self._extract_from_items(items, next_line_items)
             else:
-                if k in ["date_naissance", "date_expiration", "date_delivrance"]:
-                    val = self._format_date(val)
-                result[k] = val
+                line_result = self._extract_from_text(line.get("text", ""))
+
+            # Fusionner en gardant la valeur valide la plus longue (si non existante)
+            for field, value in line_result.items():
+                if field and value:
+                    val = str(value).strip(" :.-\u00a0/")
+                    if not val or (len(val) < 2 and field != "sexe"):
+                        continue
+                        
+                    if self._valid_field_value(field, val):
+                        if field in ["date_naissance", "date_expiration", "date_delivrance"]:
+                            val = self._format_date(val)
+                        
+                        if field not in result:
+                            result[field] = val
+                        else:
+                            # Ne jamais écraser une valeur MRZ par une valeur lue (souvent de moins bonne qualité)
+                            # Or, MRZ est appelé en premier. Donc si une valeur existe déjà, elle vient 
+                            # probablement de la MRZ. Si elle est très courte (erreur de parsage ?), on peut remplacer.
+                            if len(val) > len(result[field]) and field not in ["date_naissance", "date_expiration", "date_delivrance", "nom", "prenom", "numero_document", "nationalite"]:
+                                result[field] = val
 
         return result
 
-    @staticmethod
-    def _format_date(val):
-        """Formate une date brute (e.g. 13071990) en format lisible (13/07/1990)."""
-        clean_val = re.sub(r"[^\d]", "", val)
-        if len(clean_val) == 8:
-            return f"{clean_val[:2]}/{clean_val[2:4]}/{clean_val[4:]}"
-        return val
+    def _extract_from_items(self, items, next_line_items=None):
+        result = {}
+        sorted_items = sorted(items, key=lambda item: self.center_x(item["box"]))
 
+        labels = []
+        for index, item in enumerate(sorted_items):
+            field, keyword = self.matcher.match_with_keyword(item["text"])
+            if field is not None:
+                labels.append((index, field, keyword))
+
+        if not labels:
+            return self._extract_from_text(" ".join(item["text"] for item in sorted_items))
+
+        for index, field, keyword in labels:
+            if field in result:
+                continue
+
+            value = self._extract_value_from_line(sorted_items, index, labels, next_line_items)
+            if value:
+                result[field] = value
+
+        return result
+
+    def _extract_value_from_line(self, sorted_items, label_index, labels, next_line_items=None):
+        label_item = sorted_items[label_index]
+        field, keyword = self.matcher.match_with_keyword(label_item["text"])
+        if field is None:
+            return ""
+
+        text_after_label = self._after_label(label_item["text"], keyword)
+        # S'il y a un "/" dans le texte (ex: "NOM/SURNAME"), on risque de capturer "SURNAME" comme valeur.
+        if text_after_label and "/" in label_item["text"]:
+            parts = label_item["text"].split("/", 1)
+            # Si le texte après "/" fait moins de 10 caractères ou n'a pas d'espace, c'est probablement un sous-titre
+            if len(parts[1].strip()) < 15 and " " not in parts[1].strip():
+                text_after_label = ""
+            elif not self._is_valid(field, text_after_label):
+                text_after_label = ""
+
+        if text_after_label and self._valid_field_value(field, text_after_label):
+            return text_after_label
+
+        next_label_index = next((pos for pos, _, _ in labels if pos > label_index), len(sorted_items))
+        candidate_parts = [item["text"] for item in sorted_items[label_index + 1:next_label_index]]
+        candidate = " ".join(candidate_parts).strip()
+
+        if candidate and not self._looks_like_field_label(candidate):
+            if candidate and not (len(labels) > 1 and next_line_items):
+                if self._valid_field_value(field, candidate):
+                    return candidate
+
+        if next_line_items:
+            next_row_value = self._extract_value_from_next_row(label_item, next_line_items)
+            if next_row_value and self._valid_field_value(field, next_row_value):
+                return next_row_value
+
+        combined = " ".join(item["text"] for item in sorted_items[label_index:next_label_index])
+        extracted = self._after_label(combined, keyword)
+        if extracted and self._valid_field_value(field, extracted):
+            return extracted
+
+        # fallback: if label is first token and rest of line are values and no next row mapping exists
+        if not next_line_items and label_index == 0 and len(sorted_items) > 1:
+            fb_val = " ".join(item["text"] for item in sorted_items[1:]).strip()
+            if fb_val and not self._looks_like_field_label(fb_val) and self._valid_field_value(field, fb_val):
+                return fb_val
+
+        # Si rien de valide n'a été trouvé, mais qu'on avait un candidat, on le retourne pour voir
+        if text_after_label and not self._looks_like_field_label(text_after_label):
+            return text_after_label
+        if candidate and not self._looks_like_field_label(candidate):
+            return candidate
+        if next_line_items:
+            next_row_value = self._extract_value_from_next_row(label_item, next_line_items)
+            if next_row_value and not self._looks_like_field_label(next_row_value):
+                return next_row_value
+        return ""
+
+    def _extract_value_from_next_row(self, label_item, next_line_items):
+        if not next_line_items:
+            return ""
+
+        label_x = self.center_x(label_item["box"])
+        sorted_next_items = sorted(next_line_items, key=lambda item: self.center_x(item["box"]))
+
+        best_item = min(
+            sorted_next_items,
+            key=lambda item: abs(self.center_x(item["box"]) - label_x)
+        )
+
+        return best_item["text"].strip()
+
+    def _extract_from_text(self, text):
+        result = {}
+        field, keyword = self.matcher.match_with_keyword(text)
+        if field is None:
+            return result
+
+        value = self._after_label(text, keyword)
+        if value and self._valid_field_value(field, value):
+            result[field] = value
+
+        return result
+
+    def _after_label(self, text, keyword):
+        if not keyword:
+            return text.strip()
+
+        pattern = re.compile(r"^\s*" + re.escape(keyword) + r"\s*[:\-–—]?\s*(.*)$", re.IGNORECASE)
+        match = pattern.search(text)
+        if match:
+            return match.group(1).strip(" \t\n\r\u00a0:-.")
+
+        text = text.strip()
+        if text.lower().startswith(keyword.lower()):
+            return text[len(keyword):].strip(" \t\n\r\u00a0:-.")
+
+        return ""
+
+    @staticmethod
+    def center_x(box):
+        return (box[0][0] + box[1][0]) / 2
 
     # =====================================================
-    # PRIORITÉ 1 : EXTRACTION DEPUIS LA MRZ
+    # MRZ PARSING (From V1)
     # =====================================================
 
     def _extract_from_mrz(self, items, result):
-        """
-        Parse les lignes MRZ (Machine Readable Zone) pour extraire les données clés.
-        Format passeport (TD3) : 2 lignes de 44 chars
-        Format CNI (TD1)       : 3 lignes de 30 chars
-        """
         mrz_lines = []
         for item in items:
-            t = item["text"].strip()
-            # Une ligne MRZ contient forcément des "<"
+            t = item["text"].strip().upper()
             if "<" in t and len(t) >= 15:
                 mrz_lines.append(t)
 
@@ -150,24 +251,59 @@ class ValueExtractor:
             return
 
         for line in mrz_lines:
-            # Ligne de nom de passeport : P<FRA BERTHIER<<CORINNE...
-            if line.startswith("P<") or line.startswith("P<FRA"):
-                self._parse_mrz_name_line(line, result)
+            is_name_line = False
+            if re.match(r"^P[<A-Z][A-Z]{3}", line):
+                is_name_line = True
+            elif re.match(r"^<[A-Z]{3}", line) and "<<" in line:
+                is_name_line = True
+            elif re.match(r"^[A-Z]{3}[A-Z<]*<<", line):
+                is_name_line = True
 
-            # Ligne de nom de CNI : IDFRABERTHIER<<...
-            elif re.match(r"^(IDFRA|I<FRA|ID[A-Z]{3})", line):
+            if is_name_line:
                 self._parse_mrz_name_line(line, result)
-
-            # Ligne de données (numéro document, date naissance, date expiration)
+            elif re.match(r"^(ID[A-Z]{3}|I<[A-Z]{3})", line):
+                self._parse_mrz_name_line(line, result)
             else:
                 self._parse_mrz_data_line(line, result)
 
     def _parse_mrz_name_line(self, line, result):
-        """Extrait nom + prénom d'une ligne MRZ de type nom."""
-        # Supprimer seulement le préfixe de document connu (P<FRA, IDFRA, I<FRA)
-        # en laissant intact le nom qui suit
-        clean = re.sub(r"^(?:P<[A-Z]{3}|ID[A-Z]{3}|I<[A-Z]{3})", "", line)
-        parts = clean.split("<<", 1)
+        _COUNTRY_NAMES = {
+            "USA": "AMÉRICAINE",    "CHE": "SUISSE",        "BRA": "BRÉSILIENNE",
+            "FRA": "FRANÇAISE",    "DEU": "ALLEMANDE",     "GBR": "BRITANNIQUE",
+            "ESP": "ESPAGNOLE",    "ITA": "ITALIENNE",     "PRT": "PORTUGAISE",
+            "BEL": "BELGE",        "NLD": "NÉERLANDAISE",  "CAN": "CANADIENNE",
+            "AUS": "AUSTRALIENNE", "MAR": "MAROCAINE",     "ALB": "ALBANAISE",
+            "ZAF": "SUD-AFRICAINE","TUN": "TUNISIENNE",    "DZA": "ALGÉRIENNE",
+            "EGY": "ÉGYPTIENNE",   "SEN": "SÉNÉGALAISE",   "CIV": "IVOIRIENNE",
+            "CMR": "CAMEROUNAISE", "MLI": "MALIENNE",      "NER": "NIGÉRIENNE",
+            "BFA": "BURKINABÈ",    "GIN": "GUINÉENNE",     "COD": "CONGOLAISE",
+            "MDG": "MALGACHE",     "MUS": "MAURICIENNE",   "RWA": "RWANDAISE",
+            "MEX": "MEXICAINE",    "ARG": "ARGENTINE",     "COL": "COLOMBIENNE",
+            "IND": "INDIENNE",     "CHN": "CHINOISE",      "JPN": "JAPONAISE",
+            "RUS": "RUSSE",        "TUR": "TURQUE",        "PAK": "PAKISTANAISE",
+        }
+
+        country_code = None
+        clean_line = line
+        
+        m_standard = re.match(r"^P[<A-Z]([A-Z]{3})", line)
+        m_no_p = re.match(r"^<([A-Z]{3})", line)
+        m_no_prefix = re.match(r"^([A-Z]{3})", line)
+        
+        if m_standard:
+            country_code = m_standard.group(1)
+            clean_line = line[5:]
+        elif m_no_p and "<<" in line:
+            country_code = m_no_p.group(1)
+            clean_line = line[4:]
+        elif m_no_prefix and "<<" in line:
+            country_code = m_no_prefix.group(1)
+            clean_line = line[3:]
+            
+        if country_code and "nationalite" not in result:
+            result["nationalite"] = _COUNTRY_NAMES.get(country_code, country_code)
+
+        parts = clean_line.split("<<", 1)
 
         if parts[0] and "nom" not in result:
             surname = parts[0].replace("<", " ").strip()
@@ -180,40 +316,55 @@ class ValueExtractor:
                 result["prenom"] = given.title()
 
     def _parse_mrz_data_line(self, line, result):
-        """
-        Extrait numéro document, dates depuis la 2e ligne MRZ.
-        Supporte TD3 (passeport, 44 chars) et TD1 (CNI, 30 chars).
-        """
         clean = line.replace(" ", "")
         length = len(clean)
 
-        # ---- TD3 (passeport) : 44 chars exactement ----
-        # pos 1-9  : numéro document
-        # pos 10   : chiffre de contrôle
-        # pos 11-13: nationalité
-        # pos 14-19: date naissance (YYMMDD)
-        # pos 20   : chiffre de contrôle
-        # pos 21   : sexe (M/F/<)
-        # pos 22-27: date expiration (YYMMDD)
-        if length >= 40:
-            # Numéro document : 9 premiers chars, strip '<'
+        # ---- TD3 (passeport) : 44 chars ----
+        if length >= 38:
+            td3_match = re.search(r"([A-Z0-9]{6,9})<?(?:\d|<<)?([A-Z]{3})(\d{6})\d?([MF<])(\d{6})", clean)
+            if td3_match:
+                doc = td3_match.group(1)
+                if doc and "numero_document" not in result:
+                    result["numero_document"] = doc
+                
+                country_code = td3_match.group(2)
+                _COUNTRY_NAMES = {
+                    "USA": "AMÉRICAINE",    "CHE": "SUISSE",        "BRA": "BRÉSILIENNE",
+                    "FRA": "FRANÇAISE",    "DEU": "ALLEMANDE",     "GBR": "BRITANNIQUE",
+                }
+                if country_code and "nationalite" not in result:
+                    result["nationalite"] = _COUNTRY_NAMES.get(country_code, country_code)
+                    
+                dob_str = td3_match.group(3)
+                if dob_str and "date_naissance" not in result:
+                    result["date_naissance"] = self._format_mrz_date(dob_str, is_birth=True)
+                    
+                sex_marker = td3_match.group(4)
+                if sex_marker in ("M", "F") and "sexe" not in result:
+                    result["sexe"] = sex_marker
+                    
+                exp_str = td3_match.group(5)
+                if exp_str and "date_expiration" not in result:
+                    result["date_expiration"] = self._format_mrz_date(exp_str, is_birth=False)
+                return
+
             doc = clean[:9].rstrip("<")
             if doc and re.match(r"^[A-Z0-9]{3,9}$", doc) and "numero_document" not in result:
                 result["numero_document"] = doc
 
-            # Dates uniquement si le marqueur de sexe (M/F) est à la position 20
             sex_marker = clean[20:21] if length > 20 else ""
             if sex_marker in ("M", "F"):
-                dob_str = clean[13:19]   # positions 14-19 (index 13-18)
-                exp_str = clean[21:27]   # positions 22-27 (index 21-26)
+                if "sexe" not in result:
+                    result["sexe"] = sex_marker
+                dob_str = clean[13:19]
+                exp_str = clean[21:27]
                 if re.match(r"^\d{6}$", dob_str) and "date_naissance" not in result:
-                    result["date_naissance"] = self._format_mrz_date(dob_str)
+                    result["date_naissance"] = self._format_mrz_date(dob_str, is_birth=True)
                 if re.match(r"^\d{6}$", exp_str) and "date_expiration" not in result:
-                    result["date_expiration"] = self._format_mrz_date(exp_str)
+                    result["date_expiration"] = self._format_mrz_date(exp_str, is_birth=False)
             return
 
         # ---- TD1 (CNI) : ~30 chars ----
-        # Numéro document en début de ligne
         if length >= 15:
             match_doc = re.match(r"^([A-Z0-9]{6,9})", clean)
             if match_doc and "numero_document" not in result:
@@ -221,352 +372,44 @@ class ValueExtractor:
                 if len(doc) >= 6:
                     result["numero_document"] = doc
 
-            # Chercher sexe pour séparer les dates
-            td1_match = re.search(r"(\d{6})\d?[MF<](\d{6})", clean)
+            td1_match = re.search(r"(\d{6})\d?([MF<])(\d{6})", clean)
             if td1_match:
                 if "date_naissance" not in result:
-                    result["date_naissance"] = self._format_mrz_date(td1_match.group(1))
+                    result["date_naissance"] = self._format_mrz_date(td1_match.group(1), is_birth=True)
                 if "date_expiration" not in result:
-                    result["date_expiration"] = self._format_mrz_date(td1_match.group(2))
+                    result["date_expiration"] = self._format_mrz_date(td1_match.group(3), is_birth=False)
+                if "sexe" not in result and td1_match.group(2) in ("M", "F"):
+                    result["sexe"] = td1_match.group(2)
 
     @staticmethod
-    def _format_mrz_date(d):
-        """Convertit YYMMDD → DD.MM.YYYY (estimé)."""
+    def _format_mrz_date(d, is_birth=True):
         if len(d) != 6:
             return d
         yy, mm, dd = d[:2], d[2:4], d[4:]
-        # Hypothèse : si yy > 30 → 19xx, sinon 20xx
-        year = f"19{yy}" if int(yy) > 30 else f"20{yy}"
-        return f"{dd}.{mm}.{year}"
-
-
-    # =====================================================
-    # EXTRACTION INLINE (label + valeur dans la même box)
-    # =====================================================
-
-    def extract_inline_value(self, label_text, keyword):
-        """
-        Si le texte OCR contient à la fois le label et sa valeur
-        (ex: "Nom: BERTHIER" ou "Vom:BERTHIER"), isole la valeur.
-        """
-        if not keyword:
-            return None
-
-        # Libellé bilingue (ex: "NOM/Smam") → la partie après "/" est sous-titre, pas une valeur
-        if "/" in label_text:
-            parts = label_text.split("/", 1)
-            remainder = parts[1].strip()
-            if len(remainder) <= 8 or remainder.lower() in ["smam", "surname", "nationality", "sex", "a"]:
-                return None
-
-        normalized = self._strip_accents(label_text.lower())
-        kw_norm = self._strip_accents(keyword.lower())
-
-        idx = normalized.find(kw_norm)
-
-        if idx == -1:
-            # Typo OCR sur le mot clé (ex: "Vom:" pour "Nom:")
-            match_typo = re.search(r"^[a-z]{2,6}\s*:\s*", normalized)
-            if match_typo:
-                remainder = label_text[match_typo.end():].strip(" :.-\u00a0")
-                if remainder and len(remainder) >= 2:
-                    return remainder
-            return None
-
-        remainder = label_text[idx + len(keyword):].strip(" :.-\u00a0")
-
-        if not remainder or len(remainder) < 2:
-            return None
-
-        # Vérifier que ce n'est pas un autre label
-        other_field, _ = self.matcher.match_with_keyword(remainder)
-        if other_field is not None:
-            return None
-
-        return remainder
-
-
-    def _extract_glued_inline(self, text):
-        """
-        Gère les cas où l'OCR colle le label et la valeur avec des erreurs.
-        Ex: 'NCmMICHEL' -> Nom: MICHEL
-        Ex: 'SexeF' -> Sexe: F
-        Ex: 'Nec)l08/08/1990' -> date_naissance: 08/08/1990
-        """
-        # Nettoyage brutal des espaces et mise en minuscules pour faciliter les regex
-        clean = text.lower().replace(" ", "").replace(":", "")
-
-        # 1. Nom
-        # Cherche "nom", "vom", "ncm", "nam"
-        m = re.match(r"^(nom|vom|ncm|nam)([a-zà-ÿ\-\']{2,30})$", clean)
-        if m:
-            return "nom", text[len(m.group(1)):].strip(" :.-\u00a0")
-            
-        # 2. Prénom
-        # Cherche "prenom", "prenoms", "prnoms", "prehos"
-        m = re.match(r"^(prenoms?|prnoms?|prehos|firstnames?)[)\]]*([a-zà-ÿ\,\-\']{2,40})$", clean)
-        if m:
-            return "prenom", text[len(m.group(1)):].lstrip(")] :.-\u00a0").replace(",", ", ")
-
-        # 3. Sexe
-        m = re.match(r"^(sexe?|sex)([mf])$", clean)
-        if m:
-            return "sexe", m.group(2).upper()
-            
-        # 4. Date de naissance
-        # Cherche "ne(e)le", "necle", "datedenaissance", "datedenaisso"
-        m = re.match(r"^(ne\(?e?\)?l?e?|nec\)?l?e?|datedenaiss[a-z]*|dob)([0-9\.\/\-]{8,10})$", clean)
-        if m:
-            return "date_naissance", m.group(2)
-            
-        # 5. Date d'expiration
-        # Cherche "datedexpiration", "dateexpration", ignore les apostrophes éventuelles
-        clean_no_quote = clean.replace("'", "").replace('"', "")
-        m = re.match(r"^(dated?exp[a-z]*|exp[a-z]*)([0-9\.\/\-]{8,10})$", clean_no_quote)
-        if m:
-            return "date_expiration", m.group(2)
-            
-        # 6. Date d'émission
-        m = re.match(r"^(dated?emiss[a-z]*|datedelivr[a-z]*|dateofissue|issuedate|dataeleshimit)([0-9\.\/\-]{6,10})$", clean_no_quote)
-        if m:
-            return "date_delivrance", m.group(2)
-            
-        # 7. Numéro de document
-        # Cherche "cartenationale...", "numerodocument" (non glouton)
-        m = re.match(r"^(cartenationaled?ident[a-z]*|numerodocument|ndudocument|passportnumber|iddocument|documentno)([a-z0-9]{6,15})$", clean_no_quote)
-        if m:
-            return "numero_document", m.group(2).upper()
-
-        # 8. Lieu de naissance
-        m = re.match(r"^(lieudenaissance|placeofbirth|placebirth|birthplace|vendlindja)([a-zà-ÿ\-\']{2,40})$", clean_no_quote)
-        if m:
-            return "lieu_naissance", m.group(2)
-
-        # 9. Adresse
-        m = re.match(r"^(adresse?|address|adresa)([a-z0-9à-ÿ\-\,\.\']{5,100})$", clean_no_quote)
-        if m:
-            # Pour l'adresse on veut conserver les espaces d'origine, on utilise l'astuce du texte non nettoyé
-            return "adresse", text[len(m.group(1)):].strip(" :.-\u00a0")
-
-        return None, None
+        if is_birth:
+            year = f"19{yy}" if int(yy) > 26 else f"20{yy}"
+        else:
+            year = f"20{yy}"
+        return f"{dd}/{mm}/{year}"
 
     @staticmethod
-    def _strip_accents(text):
-        text = unicodedata.normalize("NFD", text)
-        return "".join(c for c in text if unicodedata.category(c) != "Mn")
-
-
-    # =====================================================
-    # VALIDATION PAR CHAMP
-    # =====================================================
-
-    def _is_valid(self, field, value):
-        """Vérifie que la valeur extraite est cohérente avec le champ attendu."""
-        if not value or (len(value.strip()) < 2 and field != "sexe"):
-            return False
-        pattern = self._validators.get(field)
-        if pattern is None:
-            return True  # Pas de contrainte → accepter
-        return bool(pattern.match(value.strip()))
-
-
-    # =====================================================
-    # RECHERCHE SPATIALE DE LA VALEUR
-    # =====================================================
-
-    def find_values(self, label_item, items, label_index):
-
-        label_box = label_item["box"]
-        label_y = self.center_y(label_box)
-        label_right = label_box[1][0]
-        label_x = label_box[0][0]
-
-        candidates = []
-
-        for i, item in enumerate(items):
-
-            if i == label_index:
-                continue
-
-            text = item["text"].strip()
-            box = item["box"]
-
-            if not text or (len(text) < 2 and text.upper() not in ["M", "F"]):
-                continue
-
-            # Ignorer les sous-titres et bruits connus
-            if text.lower() in ["smam", "surname", "nationality", "sex", "a"]:
-                continue
-
-            # Ignorer les autres labels
-            other_field, _ = self.matcher.match_with_keyword(text)
-            if other_field is not None:
-                continue
-
-            x = self.center_x(box)
-            y = self.center_y(box)
-            left = box[0][0]
-
-            # Priorité 1 : même ligne, à droite du label
-            if self.is_same_line(label_box, box) and left >= label_right - 10:
-                h_dist = left - label_right
-                if h_dist <= self.max_horizontal_distance:
-                    candidates.append((0, h_dist, text))
-                    continue
-
-            # Priorité 2 : juste en dessous du label (verticalement proche)
-            if y > label_y:
-                v_dist = y - label_y
-                h_dist = abs(left - label_x)
-                if v_dist <= self.max_vertical_distance and h_dist <= self.max_horizontal_distance:
-                    candidates.append((v_dist, h_dist, text))
-
-        if not candidates:
-            return []
-
-        # Séparer les candidats sur la même ligne (v_dist == 0) et ceux en dessous
-        inline_candidates = [c for c in candidates if c[0] == 0]
-        if inline_candidates:
-            inline_candidates.sort(key=lambda c: c[1])
-            return [c[2] for c in inline_candidates]
-            
-        # Pour les candidats en dessous, on cherche d'abord la ligne la plus proche
-        min_v_dist = min(c[0] for c in candidates)
+    def _format_date(val):
+        _MONTHS = {
+            "JAN": "01", "FEB": "02", "MAR": "03", "APR": "04",
+            "MAY": "05", "JUN": "06", "JUL": "07", "AUG": "08",
+            "SEP": "09", "OCT": "10", "NOV": "11", "DEC": "12",
+        }
+        # Clean up spaces and duplicate months (e.g., "05 NOV/NOV 2023" -> "05NOV2023")
+        clean_val = re.sub(r"\s+", "", val.strip().upper())
+        # Handle duplicated month separated by slash e.g. "NOV/NOV"
+        clean_val = re.sub(r"([A-Z]{3})/\1", r"\1", clean_val)
         
-        # On garde ceux qui sont sur cette même "ligne visuelle" (tolérance augmentée à 30 pixels pour les cartes inclinées)
-        closest_line_candidates = [c for c in candidates if c[0] <= min_v_dist + 30]
-        
-        # Et parmi eux, on prend celui qui est le plus aligné horizontalement
-        closest_line_candidates.sort(key=lambda c: c[1])
-        return [c[2] for c in closest_line_candidates]
-
-
-    # =====================================================
-    # FALLBACKS SIMPLES
-    # =====================================================
-
-    def _apply_fallbacks(self, items, result):
-        """
-        Complète les champs manquants avec des règles simples sur le texte brut.
-        """
-        for item in items:
-            t = item["text"].strip()
-
-            # Nationalité : chercher "FRANCAISE" ou "FRA" standalone
-            if "nationalite" not in result:
-                if re.search(r"\bFRANCAISE\b|\bFRANÇAISE\b", t, re.IGNORECASE):
-                    result["nationalite"] = "FRANCAISE"
-                elif t.upper() == "FRA":
-                    result["nationalite"] = "FRA"
-
-        # Numéro document : préférer une chaîne alphanumérique mixte (lettres + chiffres)
-        # plutôt qu'un pur entier (qui serait une date ou un autre nombre)
-        if "numero_document" not in result:
-            for item in items:
-                t = item["text"].strip()
-                if (
-                    re.match(r"^[A-Z0-9]{6,15}$", t)
-                    and re.search(r"[A-Z]", t)      # doit contenir des lettres
-                    and re.search(r"[0-9]", t)      # doit contenir des chiffres
-                    and not self._is_mrz_line(t)
-                ):
-                    result["numero_document"] = t
-                    break
-
-    @staticmethod
-    def _is_mrz_line(text):
-        """Retourne True si le texte ressemble à une ligne MRZ complète."""
-        return "<" in text and len(text) >= 15
-
-
-    # =====================================================
-    # FUSION DE BOXES SUR LA MÊME LIGNE
-    # =====================================================
-
-    def merge_same_line_items(self, items):
-        if not items:
-            return items
-
-        sorted_items = sorted(
-            items,
-            key=lambda item: (self.center_y(item["box"]), self.center_x(item["box"]))
-        )
-
-        merged = []
-        used = set()
-
-        for i, item in enumerate(sorted_items):
-
-            if i in used:
-                continue
-
-            current_text = item["text"]
-            current_box = item["box"]
-
-            j = i + 1
-            while j < len(sorted_items):
-
-                if j in used:
-                    j += 1
-                    continue
-
-                next_item = sorted_items[j]
-
-                if not self.is_same_line(current_box, next_item["box"]):
-                    break
-
-                gap = next_item["box"][0][0] - current_box[1][0]
-
-                if gap < 0 or gap > self.merge_horizontal_gap:
-                    break
-
-                candidate_text = (current_text + " " + next_item["text"]).strip()
-
-                field_alone, _ = self.matcher.match_with_keyword(current_text)
-                field_combined, _ = self.matcher.match_with_keyword(candidate_text)
-
-                if field_combined is not None and field_alone is None:
-                    current_text = candidate_text
-                    current_box = self._merge_boxes(current_box, next_item["box"])
-                    used.add(j)
-                    j += 1
-                    continue
-
-                break
-
-            merged.append({"text": current_text, "box": current_box})
-            used.add(i)
-
-        return merged
-
-
-    @staticmethod
-    def _merge_boxes(box1, box2):
-        xs = [box1[0][0], box1[1][0], box2[0][0], box2[1][0]]
-        ys = [box1[0][1], box1[2][1], box2[0][1], box2[2][1]]
-        x_min, x_max = min(xs), max(xs)
-        y_min, y_max = min(ys), max(ys)
-        return [[x_min, y_min], [x_max, y_min], [x_max, y_max], [x_min, y_max]]
-
-
-    # =====================================================
-    # UTILITAIRES GÉOMÉTRIE
-    # =====================================================
-
-    def is_same_line(self, box1, box2):
-        y1 = self.center_y(box1)
-        y2 = self.center_y(box2)
-
-        height1 = abs(box1[2][1] - box1[0][1])
-        height2 = abs(box2[2][1] - box2[0][1])
-
-        avg_height = (height1 + height2) / 2 if (height1 or height2) else 0
-        tolerance = max(12, avg_height * 0.6)
-
-        return abs(y1 - y2) <= tolerance
-
-    def center_x(self, box):
-        return (box[0][0] + box[1][0]) / 2
-
-    def center_y(self, box):
-        return (box[0][1] + box[2][1]) / 2
+        m = re.match(r"^(\d{1,2})([A-Z]{3})(\d{4})$", clean_val)
+        if m:
+            month = _MONTHS.get(m.group(2))
+            if month:
+                return f"{m.group(1).zfill(2)}/{month}/{m.group(3)}"
+        clean_digit = re.sub(r"[^\d]", "", val)
+        if len(clean_digit) == 8:
+            return f"{clean_digit[:2]}/{clean_digit[2:4]}/{clean_digit[4:]}"
+        return val
