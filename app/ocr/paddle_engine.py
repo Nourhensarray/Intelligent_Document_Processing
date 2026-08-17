@@ -22,7 +22,7 @@ class PaddleEngine:
                 gpu_id=0,
                 show_log=False,
                 det_limit_side_len=736,
-                rec_batch_num=8,
+                rec_batch_num=16,
                 drop_score=0.5,
                 use_dilation=False,
                 det_db_score_mode="fast",
@@ -70,7 +70,7 @@ class PaddleEngine:
         else:
             image = self.load_image(image_input)
 
-        image = self._resize_image(image, max_side=1280)
+        image = self._resize_image(image, max_side=960)
 
         if use_color_masking:
             return self._extract_with_masks(image)

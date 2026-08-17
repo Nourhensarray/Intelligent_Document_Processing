@@ -43,17 +43,20 @@ class DocumentPipeline:
         self.field_matcher = FieldMatcher()
         self.value_extractor = ValueExtractor(matcher=self.field_matcher)
 
-        # Champs principaux attendus sur tout document d'identité.
-        # Au moins MIN_MAIN_FIELDS d'entre eux doivent être extraits avec
-        # une valeur non-vide pour qu'un document soit considéré valide.
-        self._main_field_names = {
+        # ── Champs OBLIGATOIRES ──
+        # Ces 4 champs doivent TOUS être présents avec une valeur non-vide
+        # pour qu'un document soit considéré valide (SUCCESS).
+        # Si l'un d'eux manque → FAILED, aucune donnée écrite dans la table.
+        self._mandatory_fields = {
             "nom",
             "prenom",
             "numero_document",
             "nationalite",
-            "date_naissance",
         }
-        self._MIN_MAIN_FIELDS = 2   # seuil minimum de champs principaux valides
+
+        # Champs principaux supplémentaires (utilisés pour la validation
+        # secondaire basée sur le layout OCR).
+        self._main_field_names = self._mandatory_fields | {"date_naissance"}
 
     # ------------------------------------------------------------------
     # VALIDATION POST-EXTRACTION
@@ -61,22 +64,32 @@ class DocumentPipeline:
 
     def _has_clear_main_key_values(self, layout: list, extracted_data: dict) -> bool:
         """
-        Pour chaque label principal (nom, prenom, numero_document, nationalite,
-        date_naissance) détecté dans le layout OCR, vérifie que sa valeur
-        correspondante est correctement extraite dans extracted_data.
+        Valide que les données extraites contiennent les champs obligatoires.
 
-        Règles :
-        - Si un label principal est présent dans le document mais sa valeur
-          n'est pas extraite (vide ou < 2 chars) → FAILED immédiat.
-        - Si aucun label principal n'est détecté dans le layout (passeport MRZ pur
-          ou format non structuré), on tombe sur le seuil minimum de champs extraits.
-        - Le FieldMatcher utilise son cache interne → pas de fuzzy matching redondant.
+        Règle stricte :
+        - Les 4 champs obligatoires (nom, prenom, numero_document, nationalite)
+          doivent TOUS avoir une valeur non-vide (≥ 2 caractères).
+        - Si l'un d'eux est absent ou vide → FAILED immédiat.
+
+        Règle secondaire (layout) :
+        - Pour chaque label principal détecté dans le layout OCR, sa valeur
+          correspondante doit être correctement extraite.
         """
         if not extracted_data:
             return False
 
-        # ── Étape 1 : collecter les labels principaux présents dans le layout ──
-        detected_labels: set = set()
+        # ── Étape 1 (STRICTE) : vérifier les 4 champs obligatoires ──
+        missing_fields = []
+        for field in self._mandatory_fields:
+            value = extracted_data.get(field, "")
+            if not value or len(str(value).strip()) < 2:
+                missing_fields.append(field)
+
+        if missing_fields:
+            print(f"    [!] Champs obligatoires manquants : {', '.join(missing_fields)}")
+            return False
+
+        # ── Étape 2 (SECONDAIRE) : vérifier les labels détectés dans le layout ──
         for line in layout:
             for item in (line.get("items") or []):
                 text = item.get("text", "")
@@ -84,23 +97,10 @@ class DocumentPipeline:
                     continue
                 field, _ = self.field_matcher.match_with_keyword(text)
                 if field and field in self._main_field_names:
-                    detected_labels.add(field)
-
-        # ── Étape 2 : aucun label détecté (MRZ pur / format inconnu) ──
-        # → seuil minimum sur les champs extraits pour valider quand même
-        if not detected_labels:
-            valid_count = sum(
-                1 for f in self._main_field_names
-                if extracted_data.get(f) and len(str(extracted_data.get(f, "")).strip()) >= 2
-            )
-            return valid_count >= self._MIN_MAIN_FIELDS
-
-        # ── Étape 3 : pour chaque label détecté, la valeur doit être extraite ──
-        for field in detected_labels:
-            value = extracted_data.get(field, "")
-            if not value or len(str(value).strip()) < 2:
-                # Label présent dans le document, valeur absente → document invalide
-                return False
+                    value = extracted_data.get(field, "")
+                    if not value or len(str(value).strip()) < 2:
+                        print(f"    [!] Label '{field}' détecté dans le layout mais valeur absente")
+                        return False
 
         return True
 

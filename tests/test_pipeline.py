@@ -49,13 +49,17 @@ def run_pipeline_on_image(pipeline: DocumentPipeline, image_path: str):
 
 def main():
     pipeline = DocumentPipeline()
-    results_list = []
+    success_list = []
+    failed_list = []
 
     if len(sys.argv) > 1:
         target_path = sys.argv[1]
         res = run_pipeline_on_image(pipeline, target_path)
         if res:
-            results_list.append(res)
+            if res.get("status") == "SUCCESS":
+                success_list.append(res)
+            else:
+                failed_list.append(res)
     else:
         images_dir = Path("images")
         if images_dir.exists():
@@ -64,11 +68,17 @@ def main():
                 for img in sorted(image_files):
                     res = run_pipeline_on_image(pipeline, str(img))
                     if res:
-                        results_list.append(res)
+                        if res.get("status") == "SUCCESS":
+                            success_list.append(res)
+                        else:
+                            failed_list.append(res)
             else:
                 print("Aucune image trouvée dans le dossier images/")
         else:
             print("Usage : python tests/test_pipeline.py <chemin_image>")
+
+    # Écrire le CSV : SUCCESS en haut, FAILED en bas (sans valeurs)
+    results_list = success_list + failed_list
 
     if results_list:
         csv_path = "resultats_extraction.csv"
@@ -80,10 +90,12 @@ def main():
             "adresse", "date_delivrance", "date_expiration"
         ]
         
-        # Collecter toutes les clés trouvées
+        # Collecter toutes les clés trouvées (uniquement depuis les SUCCESS)
         all_keys = set()
-        for r in results_list:
+        for r in success_list:
             all_keys.update(r.keys())
+        # S'assurer que image et status sont toujours présents
+        all_keys.update({"image", "status"})
             
         # Créer les fieldnames : l'ordre logique d'abord, puis les autres clés imprévues
         fieldnames = []
@@ -103,6 +115,7 @@ def main():
             for r in results_list:
                 writer.writerow(r)
         print(f"\n[OK] Résultats sauvegardés dans {csv_path}")
+        print(f"     → {len(success_list)} SUCCESS, {len(failed_list)} FAILED")
 
 def test_pipeline_rejects_main_label_without_value():
     pipeline = DocumentPipeline.__new__(DocumentPipeline)
@@ -113,6 +126,8 @@ def test_pipeline_rejects_main_label_without_value():
     pipeline.layout_builder = MagicMock()
     pipeline.value_extractor = MagicMock()
     pipeline.field_matcher = FieldMatcher()
+    pipeline._mandatory_fields = {"nom", "prenom", "numero_document", "nationalite"}
+    pipeline._main_field_names = pipeline._mandatory_fields | {"date_naissance"}
 
     pipeline.quality_checker.check.return_value = {
         "status": "ACCEPTED",

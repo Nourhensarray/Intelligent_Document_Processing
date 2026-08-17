@@ -35,6 +35,9 @@ def main():
     start_time = time.time()
 
     results = []
+    success_list = []
+    failed_list = []
+
     for idx, record in enumerate(
         process_images_in_parallel_generator(images, num_workers=args.workers, use_gpu=use_gpu),
         start=1
@@ -43,6 +46,14 @@ def main():
         status = record.get("status", "UNKNOWN")
         print(f"[{idx}/{len(images)}] Terminé : {image_name} (Status: {status})")
         results.append(record)
+        if status == "SUCCESS":
+            success_list.append(record)
+        else:
+            # Pour les FAILED, on ne garde QUE l'image et le statut
+            failed_list.append({
+                "image": image_name,
+                "status": status
+            })
 
     end_time = time.time()
     elapsed = end_time - start_time
@@ -55,6 +66,39 @@ def main():
     print(f"Temps total     : {elapsed:.2f} secondes")
     if len(results) > 0:
         print(f"Temps moyen     : {elapsed/len(results):.2f} sec / image")
+
+    # Écriture du fichier CSV
+    results_list = success_list + failed_list
+    if results_list:
+        import csv
+        csv_path = "resultats_extraction.csv"
+        
+        logical_order = [
+            "image", "status", "numero_document", "nom", "prenom", 
+            "date_naissance", "lieu_naissance", "sexe", "nationalite", 
+            "adresse", "date_delivrance", "date_expiration"
+        ]
+        
+        all_keys = set()
+        for r in success_list:
+            all_keys.update(r.keys())
+        all_keys.update({"image", "status"})
+            
+        fieldnames = []
+        for col in logical_order:
+            if col in all_keys:
+                fieldnames.append(col)
+                all_keys.remove(col)
+        
+        fieldnames.extend(sorted(list(all_keys)))
+        
+        with open(csv_path, 'w', newline='', encoding='utf-8-sig') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=';')
+            writer.writeheader()
+            for r in results_list:
+                writer.writerow(r)
+        print(f"\n[OK] Résultats sauvegardés dans {csv_path}")
+        print(f"     -> {len(success_list)} SUCCESS, {len(failed_list)} FAILED")
 
     print("\nExemples de données extraites :")
     for r in results[:3]:

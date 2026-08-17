@@ -4,31 +4,117 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Document Extractor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-      body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f3f6fb; color: #222; }
-      .page { max-width: 980px; margin: 0 auto; padding: 24px; }
-      h1 { margin-bottom: 8px; }
-      .panel { background: white; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); padding: 24px; margin-bottom: 24px; }
-      label { display: block; margin: 12px 0 4px; font-weight: 600; }
-      input[type="text"], textarea, select { width: 100%; padding: 10px 12px; border: 1px solid #ccd6e4; border-radius: 8px; box-sizing: border-box; }
-      input[type="file"] { margin-top: 8px; }
-      .radio-group { display: flex; align-items: center; gap: 18px; margin-bottom: 16px; }
-      .radio-group input { margin-right: 10px; }
-      .button { background: #0d6efd; color: white; padding: 12px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; }
-      .button:hover { background: #094bb5; }
-      .flash { padding: 14px 18px; border-radius: 8px; margin-bottom: 18px; }
-      .flash.success { background: #e6f4ea; color: #115f2d; border: 1px solid #c7e4d0; }
-      .flash.error { background: #fdecea; color: #8a1f11; border: 1px solid #f2c4c0; }
-      .table-wrapper { overflow-x: auto; margin-top: 18px; }
-      table { width: 100%; min-width: 720px; border-collapse: collapse; background: white; }
-      th, td { padding: 12px 14px; border: 1px solid #e3e8f0; text-align: left; vertical-align: top; }
-      th { background: #eef4ff; color: #1d3557; font-weight: 700; position: sticky; top: 0; z-index: 1; }
-      tbody tr:nth-child(even) { background: #fafbff; }
-      tbody tr:hover { background: #f0f7ff; }
-      td { color: #2d3540; }
-      .table-key { white-space: nowrap; font-weight: 600; }
-      .table-value { word-break: break-word; max-width: 220px; }
-      .footer { margin-top: 32px; font-size: 14px; color: #555; }
+      :root {
+        --primary: #4f46e5;
+        --primary-hover: #4338ca;
+        --bg-grad-1: #e0c3fc;
+        --bg-grad-2: #8ec5fc;
+        --panel-bg: rgba(255, 255, 255, 0.75);
+        --text-main: #1e293b;
+        --text-muted: #475569;
+      }
+      body { 
+        font-family: 'Inter', sans-serif; 
+        margin: 0; 
+        padding: 0; 
+        background: linear-gradient(135deg, var(--bg-grad-1) 0%, var(--bg-grad-2) 100%);
+        background-attachment: fixed;
+        color: var(--text-main); 
+        min-height: 100vh;
+      }
+      .page { max-width: 1000px; margin: 0 auto; padding: 40px 24px; }
+      h1 { margin-top: 0; margin-bottom: 8px; font-weight: 700; font-size: 2.2rem; color: #0f172a; letter-spacing: -0.02em; }
+      p { color: var(--text-muted); line-height: 1.5; }
+      .panel { 
+        background: var(--panel-bg); 
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.5);
+        border-radius: 16px; 
+        box-shadow: 0 10px 30px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.02); 
+        padding: 32px; 
+        margin-bottom: 32px; 
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+      }
+      .panel:hover {
+        box-shadow: 0 15px 35px rgba(0,0,0,0.08), 0 3px 6px rgba(0,0,0,0.04); 
+      }
+      label { display: block; margin: 16px 0 8px; font-weight: 600; font-size: 0.95rem; color: #334155; }
+      input[type="text"] { 
+        width: 100%; 
+        padding: 12px 16px; 
+        border: 1px solid rgba(255, 255, 255, 0.6); 
+        background: rgba(255, 255, 255, 0.9);
+        border-radius: 10px; 
+        box-sizing: border-box; 
+        font-family: 'Inter', sans-serif;
+        font-size: 1rem;
+        transition: all 0.2s ease;
+        box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+      }
+      input[type="text"]:focus {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.2);
+        background: #fff;
+      }
+      .button { 
+        background: var(--primary); 
+        color: white; 
+        padding: 12px 24px; 
+        border: none; 
+        border-radius: 10px; 
+        cursor: pointer; 
+        font-size: 1rem; 
+        font-weight: 600;
+        font-family: 'Inter', sans-serif;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.3), 0 2px 4px -1px rgba(79, 70, 229, 0.2);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      }
+      .button:hover { 
+        background: var(--primary-hover); 
+        transform: translateY(-2px);
+        box-shadow: 0 6px 12px -2px rgba(79, 70, 229, 0.4), 0 3px 6px -2px rgba(79, 70, 229, 0.3);
+      }
+      .button:active {
+        transform: translateY(0);
+      }
+      .button-secondary {
+        background: rgba(255,255,255,0.8);
+        color: #334155;
+        border: 1px solid rgba(0,0,0,0.1);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+      }
+      .button-secondary:hover {
+        background: #fff;
+        color: #0f172a;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.05);
+      }
+      .flash { padding: 16px 20px; border-radius: 12px; margin-bottom: 24px; font-weight: 500; display: flex; align-items: center; gap: 10px; animation: slideIn 0.4s ease-out forwards; }
+      @keyframes slideIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+      .flash.success { background: rgba(220, 252, 231, 0.85); color: #166534; border: 1px solid rgba(74, 222, 128, 0.4); backdrop-filter: blur(8px); }
+      .flash.error { background: rgba(254, 226, 226, 0.85); color: #991b1b; border: 1px solid rgba(248, 113, 113, 0.4); backdrop-filter: blur(8px); }
+      .table-wrapper { overflow-x: auto; margin-top: 24px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.4); box-shadow: 0 4px 15px rgba(0,0,0,0.03); }
+      table { width: 100%; min-width: 800px; border-collapse: collapse; background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(10px); }
+      th, td { padding: 14px 18px; border-bottom: 1px solid rgba(0,0,0,0.05); text-align: left; vertical-align: middle; }
+      th { background: rgba(255, 255, 255, 0.8); color: #0f172a; font-weight: 600; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 0.05em; position: sticky; top: 0; z-index: 1; border-bottom: 2px solid rgba(0,0,0,0.05); }
+      tbody tr { transition: background 0.2s ease; }
+      tbody tr:hover { background: rgba(255, 255, 255, 0.95); }
+      td { color: #334155; font-size: 0.95rem; }
+      .status-badge { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; }
+      .status-SUCCESS { background: #dcfce7; color: #166534; }
+      .status-FAILED { background: #fee2e2; color: #991b1b; }
+      .footer { margin-top: 40px; font-size: 0.9rem; color: rgba(30, 41, 59, 0.7); text-align: center; }
+      a.download-link { color: var(--primary); text-decoration: none; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; transition: color 0.2s; }
+      a.download-link:hover { color: var(--primary-hover); text-decoration: underline; }
     </style>
   </head>
   <body>
@@ -43,28 +129,68 @@
             {% endfor %}
           {% endif %}
         {% endwith %}
-        <form action="{{ url_for('process') }}" method="post" enctype="multipart/form-data">
-          <div class="radio-group">
-            <label><input type="radio" name="source_type" value="folder" checked onchange="toggleSource(this.value)"> Dossier d'images</label>
-            <label><input type="radio" name="source_type" value="sqlite" onchange="toggleSource(this.value)"> Base SQLite</label>
-          </div>
+        <form id="extraction-form" action="{{ url_for('process') }}" method="post" enctype="multipart/form-data">
+          <!-- Option unique : Dossier d'images -->
+          <input type="hidden" name="source_type" value="folder" />
+          
           <div id="folder-inputs">
             <label for="folder_path">Chemin du dossier d'images</label>
-            <input type="text" name="folder_path" id="folder_path" placeholder="Ex. C:\\Users\\...\\images" />
+            <div style="display: flex; gap: 12px; align-items: center;">
+              <input type="text" name="folder_path" id="folder_path" placeholder="Ex. C:\Users\...\images" style="flex-grow: 1;" required />
+              <button type="button" class="button button-secondary" onclick="browseFolder()">
+                📁 Parcourir...
+              </button>
+            </div>
           </div>
-          <div id="sqlite-inputs" style="display:none;">
-            <label for="database_path">Chemin du fichier SQLite</label>
-            <input type="text" name="database_path" id="database_path" placeholder="Ex. C:\\Users\\...\\images.db" />
-            <label>OU uploader un fichier SQLite</label>
-            <input type="file" name="sqlite_file" accept=".db,.sqlite" />
-            <label for="database_query">Requête SQL</label>
-            <input type="text" name="database_query" id="database_query" value="SELECT path FROM images" />
-          </div>
+          
           <div style="margin-top: 20px;">
-            <button class="button" type="submit">Démarrer le traitement</button>
+            <label style="display: flex; align-items: center; gap: 10px; font-weight: normal; cursor: pointer;">
+              <input type="checkbox" name="fast_mode" value="1" style="width: 20px; height: 20px; cursor: pointer;" checked>
+              <span><strong>Mode Rapide activé</strong> (désactive le recadrage et les corrections d'images pour aller ~30% plus vite. Recommandé si vos images sont déjà claires).</span>
+            </label>
+          </div>
+          
+          <div style="margin-top: 32px; display: flex; gap: 10px;">
+            <button id="start-btn" class="button" type="submit" style="flex-grow: 1; font-size: 1.1rem; padding: 16px;" onclick="onStart()">🚀 Démarrer l'extraction</button>
+            <button id="stop-btn" class="button button-secondary" type="button" style="display: none; font-size: 1.1rem; padding: 16px; background-color: #ff4757; color: white;" onclick="onStop()">🛑 Arrêter</button>
           </div>
         </form>
       </div>
+
+      <script>
+        function onStart() {
+          const form = document.getElementById('extraction-form');
+          // Permettre la validation HTML5 native d'abord
+          if (!form.checkValidity()) {
+            return;
+          }
+          
+          const startBtn = document.getElementById('start-btn');
+          const stopBtn = document.getElementById('stop-btn');
+          
+          // Petit délai pour laisser le formulaire se soumettre avant de modifier le bouton
+          setTimeout(() => {
+            startBtn.disabled = true;
+            startBtn.innerHTML = "⏳ Traitement en cours... (Veuillez patienter)";
+            startBtn.style.opacity = "0.7";
+            startBtn.style.cursor = "not-allowed";
+            
+            stopBtn.style.display = "block";
+          }, 50);
+        }
+
+        async function onStop() {
+          const stopBtn = document.getElementById('stop-btn');
+          stopBtn.disabled = true;
+          stopBtn.innerHTML = "🛑 Arrêt en cours...";
+          
+          try {
+            await fetch('/stop', { method: 'POST' });
+          } catch (e) {
+            console.error(e);
+          }
+        }
+      </script>
 
       {% if results %}
         <div class="panel">
@@ -82,8 +208,8 @@
               <tbody>
                 {% for row in results %}
                   <tr>
-                    {% for value in row.values() %}
-                      <td>{{ value }}</td>
+                    {% for column in results[0].keys() %}
+                      <td>{{ row.get(column, '') }}</td>
                     {% endfor %}
                   </tr>
                 {% endfor %}
@@ -98,9 +224,16 @@
       </div>
     </div>
     <script>
-      function toggleSource(source) {
-        document.getElementById('folder-inputs').style.display = source === 'folder' ? 'block' : 'none';
-        document.getElementById('sqlite-inputs').style.display = source === 'sqlite' ? 'block' : 'none';
+      async function browseFolder() {
+        try {
+          const response = await fetch('/browse');
+          const data = await response.json();
+          if (data.folder_path) {
+            document.getElementById('folder_path').value = data.folder_path;
+          }
+        } catch (error) {
+          console.error("Erreur lors de l'ouverture du sélecteur de dossier :", error);
+        }
       }
     </script>
   </body>
