@@ -57,18 +57,36 @@ def process_images_in_parallel_generator(images: list, num_workers: int = None, 
         fast_mode  : True pour bypasser les prétraitements d'images.
     """
     if use_gpu:
-        # ── Mode GPU : 1 seul pipeline, inférence rapide grâce au GPU ──
-        print(f"Mode GPU : initialisation unique du moteur OCR (fast_mode={fast_mode})...")
-        pipeline = DocumentPipeline(fast_mode=fast_mode)
-        for image_path in images:
+        # Mode GPU : Parallélisation via threads pour exploiter le GPU à 100% sans bloquer
+        print(f"Mode GPU : Traitement multithread (fast_mode={fast_mode})...")
+        import concurrent.futures
+        import threading
+        
+        thread_local = threading.local()
+
+        def get_pipeline():
+            if not hasattr(thread_local, "pipeline"):
+                thread_local.pipeline = DocumentPipeline(fast_mode=fast_mode)
+            return thread_local.pipeline
+
+        def process_single(image_path):
+            pipeline = get_pipeline()
             try:
                 result = pipeline.process(image_path)
                 record = {"image": Path(image_path).name, "status": result.get("status", "UNKNOWN")}
                 if result.get("data"):
                     record.update(result["data"])
+                return record
             except Exception as e:
-                record = {"image": Path(image_path).name, "status": f"ERROR: {str(e)}"}
-            yield record
+                return {"image": Path(image_path).name, "status": f"ERROR: {str(e)}"}
+
+        # 3 workers est idéal pour une RTX 2050 (4Go VRAM). Chaque modèle prend ~1Go.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            # Soumettre toutes les tâches
+            futures = [executor.submit(process_single, path) for path in images]
+            # Yield les résultats au fur et à mesure qu'ils se terminent
+            for future in concurrent.futures.as_completed(futures):
+                yield future.result()
     else:
         # ── Mode CPU : pool de workers en multiprocessing ──
         if num_workers is None:

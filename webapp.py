@@ -2,8 +2,6 @@ import os
 import csv
 from pathlib import Path
 from flask import Flask, render_template, request, flash, redirect, url_for, send_file, jsonify
-import tkinter as tk
-from tkinter import filedialog
 
 from app.batch_processor import process_images_in_parallel_generator
 from app.data_source import list_images_in_folder
@@ -17,26 +15,8 @@ def index():
 
 @app.route("/browse", methods=["GET"])
 def browse_folder():
-    """Ouvre une fenêtre locale pour choisir un dossier et renvoie le chemin."""
-    # Améliorer la qualité de la fenêtre sous Windows (DPI Awareness)
-    import ctypes
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
-    except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
-
-    # Création d'une fenêtre cachée
-    root = tk.Tk()
-    root.withdraw()
-    # Met la fenêtre au premier plan
-    root.attributes('-topmost', True)
-    folder_path = filedialog.askdirectory(title="Sélectionner le dossier d'images")
-    root.destroy()
-    
-    return jsonify({"folder_path": folder_path})
+    """Désactivé : Le sélecteur de dossier local (tkinter) est incompatible avec un serveur Web/Docker."""
+    return jsonify({"error": "Le bouton parcourir est désactivé sur la version Docker. Veuillez taper le chemin (ex: /app/images_test) manuellement."}), 400
 
 @app.route("/process", methods=["POST"])
 def process():
